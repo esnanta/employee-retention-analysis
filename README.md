@@ -41,5 +41,7 @@ The data contains demographic details, work-related metrics and attrition flag.
 
 ## Acknowledgement
 
-This dataset and use case are inspired by IBM's HR Analytics initiative. Special thanks to IBM for providing valuable insights into employee attrition analysis. Source: [IBM Watson Analytics Blog - HR Use Case: Retaining Valuable Employees](https://www.ibm.com/communities/analytics/watson-analytics-blog/watson-analytics-use-case-for-hr-retaining-valuable-employees/)
+This dataset and use case are inspired by IBM's HR Analytics initiative. Special thanks to IBM for providing valuable insights into employee attrition analysis.
+
+Source: [IBM Watson Analytics Blog - HR Use Case: Retaining Valuable Employees](https://www.ibm.com/communities/analytics/watson-analytics-blog/watson-analytics-use-case-for-hr-retaining-valuable-employees/)
 
