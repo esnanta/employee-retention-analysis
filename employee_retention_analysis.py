@@ -17,54 +17,47 @@ Original file is located at
 ### Menyiapkan library yang dibutuhkan
 """
 
-# Import Library
-import csv
+# ==================== IMPORT LIBRARY ====================
 import pandas as pd
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
-from scipy.stats import pearsonr, spearmanr
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder, OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.cluster import KMeans
+from sklearn.metrics import accuracy_score, classification_report
+
+from scipy.stats import pearsonr, spearmanr, ttest_ind, chi2_contingency
+
+import requests
+import math
 
 """### Menyiapkan data yang akan digunakan"""
 
-# Data Gathering
-# Unduh file hanya sekali dan simpan lokal
+# ==================== DATA GATHERING ====================
 url = "https://raw.githubusercontent.com/dicodingacademy/dicoding_dataset/main/employee/employee_data.csv"
 local_path = "employee_data.csv"
 
-# Simpan lokal
-import requests
+# Download and save the dataset
 with open(local_path, 'wb') as f:
     f.write(requests.get(url).content)
 
-# Baca dari file lokal (lebih cepat)
 df = pd.read_csv(local_path, encoding="utf-8")
 df.head()
 
 """## Data Understanding"""
 
-# Menampilkan ringkasan umum tentang dataset
-
-# 1. Ukuran Dataset
-print(f"📊 Dataset memiliki {df.shape[0]} baris dan {df.shape[1]} kolom.\n")
-
-# 2. Nama-nama Kolom
-print("🧾 Kolom-kolom dalam dataset:")
-print(", ".join(df.columns), "\n")
-
-# 3. Jumlah Data Duplikat
-duplicates = df.duplicated().sum()
-print(f"🔁 Jumlah baris duplikat: {duplicates}\n")
-
-# 4. Kolom dengan Missing Values
+print(f"📊 Dataset: {df.shape[0]} rows, {df.shape[1]} columns\n")
+print("🧾 Columns:", ", ".join(df.columns), "\n")
+print(f"🔁 Duplicate rows: {df.duplicated().sum()}")
 missing = df.isnull().sum()[df.isnull().sum() > 0]
 if not missing.empty:
-    print("⚠️ Kolom yang memiliki nilai hilang (missing values):")
-    for col, val in missing.items():
-        print(f"- {col}: {val}")
+    print("⚠️ Columns with missing values:")
+    print(missing)
 else:
-    print("✅ Tidak ada missing values dalam dataset.")
+    print("✅ No missing values in dataset.")
 
 df.info()
 
@@ -74,8 +67,9 @@ df.info()
 * 8 kolom kategorikal: object → perlu encoding pada tahap Data Preparation.
 """
 
-df.describe()
 
+
+# ==================== DATA EXPLORATION ====================
 # Mengecek Distribusi Target
 sns.countplot(data=df, x="Attrition")
 plt.title("Distribusi Attrition (0 = Bertahan, 1 = Keluar)")
@@ -100,132 +94,232 @@ plt.show()
 
 """
 
-# Heatmap Korelasi:
+# Heatmap korelasi numerik
 # * Melihat kekuatan hubungan antar fitur
 # * Menilai fitur apa yang berpengaruh terhadap target (Attrition)
-
-# Continuous numeric features (exclude ordinal + Attrition)
-numeric_features = ['Age', 'DailyRate', 'DistanceFromHome', 'HourlyRate', 'MonthlyIncome', 'MonthlyRate',
-                      'NumCompaniesWorked', 'PercentSalaryHike', 'TotalWorkingYears', 'TrainingTimesLastYear',
-                      'YearsAtCompany', 'YearsInCurrentRole', 'YearsSinceLastPromotion', 'YearsWithCurrManager']
-
-# Pearson correlation for continuous numeric
+numeric_features = [
+    'Age', 'DailyRate', 'DistanceFromHome', 'HourlyRate', 'MonthlyIncome', 'MonthlyRate',
+    'NumCompaniesWorked', 'PercentSalaryHike', 'TotalWorkingYears', 'TrainingTimesLastYear',
+    'YearsAtCompany', 'YearsInCurrentRole', 'YearsSinceLastPromotion', 'YearsWithCurrManager'
+]
 pearson_corr = df[numeric_features + ["Attrition"]].corr(method="pearson")
 plt.figure(figsize=(12, 10))
 sns.heatmap(pearson_corr, annot=True, fmt=".2f", cmap="coolwarm", square=True, linewidths=.5)
 plt.title("Pearson Correlation: Continuous Numeric Features & Attrition")
 plt.show()
-
-# Print sorted correlation with Attrition
 print("Pearson correlations with Attrition (continuous features):")
 print(pearson_corr["Attrition"].drop("Attrition").sort_values(ascending=False))
 
-# Define ordinal feature groups
-ordinal_features = ['Education', 'EnvironmentSatisfaction', 'JobInvolvement', 'JobLevel',
-                    'JobSatisfaction', 'RelationshipSatisfaction', 'WorkLifeBalance']
-
-# Spearman correlation for ordinal features
+# Korelasi ordinal
+ordinal_features = [
+    'Education', 'EnvironmentSatisfaction', 'JobInvolvement', 'JobLevel',
+    'JobSatisfaction', 'RelationshipSatisfaction', 'WorkLifeBalance'
+]
 spearman_corr = df[ordinal_features + ["Attrition"]].corr(method="spearman")
 plt.figure(figsize=(8, 6))
 sns.heatmap(spearman_corr, annot=True, fmt=".2f", cmap="viridis", square=True, linewidths=.5)
 plt.title("Spearman Correlation: Ordinal Features & Attrition")
 plt.show()
-
 print("\nSpearman correlations with Attrition (ordinal features):")
 print(spearman_corr["Attrition"].drop("Attrition").sort_values(ascending=False))
 
-"""**Catatan**: Korelasi dihitung menggunakan **Pearson** untuk fitur numerik kontinu dan **Spearman** untuk fitur ordinal.
+"""1. JobLevel (meskipun tidak sangat kuat) berkorelasi semakin tinggi jabatan, makin kecil kemungkinan keluar."""
 
-### 1. Korelasi Positif (semakin besar, semakin cenderung keluar)
-- **DistanceFromHome**: +0.078  
-- **NumCompaniesWorked**: +0.037  
-- **MonthlyRate**: +0.023  
+# ATTRITION RATE BY CATEGORICAL FEATURE
+# Menampilkan rata-rata attrition untuk setiap kategori dari fitur kategorikal.
+# Memetakan fitur mana yang berpotensi menjadi “early warning” atau sasaran intervensi HR.
+# Memberi insight awal sebelum analisis lebih lanjut (seperti modeling).
 
-> Semua korelasi tergolong **sangat lemah** (< |0.10|).
+categorical = ['BusinessTravel','Department','EducationField','Gender','MaritalStatus','OverTime']
+
+print("=== ATTRITION RATE by Categorical Feature ===\n")
+for cat in categorical:
+    pivot = df.groupby(cat)['Attrition'].mean().sort_values(ascending=False)
+    print(f"[{cat}]\n{pivot.to_string()}\n{'-'*50}")
+
+"""1. Semakin sering dinas, semakin besar peluang karyawan keluar.
+2. Karyawan Sales lebih rentan keluar dibanding departemen lain.
+3. Latar belakang pendidikan teknis/marketing cenderung lebih sering keluar.
+4. Tidak ada perbedaan signifikan antara pria dan wanita.
+5. Karyawan lajang paling rawan keluar.
+6. Lembur tinggi = risiko keluar makin tinggi.
+"""
+
+# CHI-SQUARE TES
+# 1. Menguji hubungan/keterkaitan antara dua variabel kategorikal
+#     (misal: apakah ‘OverTime’ berhubungan dengan ‘Attrition’).
+# 2. Nilai chi-square: mengukur seberapa besar deviasi antara distribusi
+#     yang diamati vs distribusi yang diharapkan jika tidak ada hubungan.
+#     p-value: jika < 0.05 → ada hubungan yang signifikan secara statistik.
+
+print("\n=== CHI-SQUARE TEST (Korelasi Fitur Kategorikal vs Attrition) ===\n")
+for cat in categorical:
+    ct = pd.crosstab(df[cat], df['Attrition'])
+    chi2, p, _, _ = chi2_contingency(ct)
+    print(f"{cat:15} | chi2={chi2:7.2f} | p-value={p:.4f}")
+
+"""1. **BusinessTravel, MaritalStatus, OverTime.** berkorelasi dengan attrition rate tinggi.
+    * p-value sangat kecil (<0.05), artinya ada hubungan kuat antara fitur ini dengan Attrition (layak masuk analisis/model lebih lanjut).
+
+2. **Department, EducationField, Gender.**
+    * p-value lebih dari 0.05 → tidak ada bukti hubungan yang signifikan antara fitur tersebut dan Attrition (boleh dipertimbangkan untuk di-drop dari model untuk prediksi/feature selection).
+"""
+
+# T-TEST
+# 1. Menguji perbedaan rata-rata suatu fitur numerik antara dua grup
+#     (misal: rerata ‘Age’ pada karyawan yang keluar vs. bertahan).
+# 2. t-statistic: mengukur seberapa besar perbedaan rata-rata.
+# 3. p-value: jika < 0.05 → perbedaan rata-rata signifikan.
+
+print("\n=== T-TEST (Perbedaan Mean Fitur Numerik antara Bertahan vs Keluar) ===\n")
+for num in numeric_features:
+    grp0 = df.loc[df.Attrition==0, num]
+    grp1 = df.loc[df.Attrition==1, num]
+    stat, p = ttest_ind(grp0, grp1, nan_policy='omit')
+    print(f"{num:18} | t-stat={stat:7.2f} | p-value={p:.4f}")
+
+"""1. Fitur Numerik (t-test p-value < 0.05) dan berkorelasi Pearson negatif cukup besar (>-0.12) mengindikasikan perbedaan signifikan antara bertahan dan keluar.
+  * Age: t=5.68, p=0.0000 || Pearson =  -0.172067
+  * TotalWorkingYears: t=5.85, p=0.0000 || Pearson = -0.177137
+  * MonthlyIncome: t=5.39, p=0.0000 || Pearson =  -0.163600
+  * TotalWorkingYears: t=5.85, p=0.0000 || Pearson =  -0.177137
+  * YearsAtCompany: t=4.43, p=0.0000 || Pearson =  -0.135134
+
+Karyawan yang lebih muda, lebih sering bepergian, lajang, bekerja lembur, pendapatan lebih rendah, sedikit pengalaman, dan baru bekerja beberapa tahun di perusahaan cenderung lebih tinggi keluar (attrition rate-nya).
+
+## Kesimpulan Analisis Faktor Attrition Rate Karyawan
+
+### 1. Fitur Kategorikal dengan Pengaruh Signifikan (Chi-Square Test)
+- **BusinessTravel**, **MaritalStatus**, dan **OverTime** memiliki hubungan yang kuat dan signifikan dengan attrition rate (p-value < 0.05).
+    - Karyawan yang sering bepergian, berstatus lajang, dan sering lembur memiliki risiko keluar yang jauh lebih tinggi.
+- Fitur seperti **Department**, **EducationField**, dan **Gender** tidak menunjukkan hubungan signifikan dan dapat dipertimbangkan untuk tidak dimasukkan dalam model prediksi.
 
 ---
 
-### 2. Korelasi Negatif (semakin besar, semakin cenderung bertahan)  
-Fokus pada nilai **≤ –0.12**:
-
-| Fitur                       | Korelasi  | Tipe      |
-|-----------------------------|----------:|-----------|
-| **JobLevel**                | –0.1918   | Ordinal   |
-| **TotalWorkingYears**       | –0.1771   | Numeric   |
-| **Age**                     | –0.1721   | Numeric   |
-| **StockOptionLevel**        | –0.1642   | Numeric   |
-| **MonthlyIncome**           | –0.1636   | Numeric   |
-| **YearsInCurrentRole**      | –0.1588   | Numeric   |
-| **YearsWithCurrManager**    | –0.1560   | Numeric   |
-| **JobInvolvement**          | –0.1366   | Ordinal   |
-| **YearsAtCompany**          | –0.1351   | Numeric   |
-| **EnvironmentSatisfaction** | –0.1267   | Ordinal   |
-
-> Fitur-fitur ini memiliki hubungan negatif terkuat dengan `Attrition`—nilai yang lebih tinggi menunjukkan peluang churn yang lebih rendah.
+### 2. Fitur Numerik dengan Perbedaan Rata-Rata yang Signifikan (T-Test & Pearson Correlation)
+- Fitur numerik berikut memiliki perbedaan rata-rata yang signifikan antara karyawan yang bertahan dan keluar (p-value < 0.05) serta korelasi negatif terhadap attrition:
+    - **Age**: Karyawan yang keluar rata-rata lebih muda.
+    - **TotalWorkingYears**: Karyawan yang keluar cenderung memiliki pengalaman kerja lebih sedikit.
+    - **MonthlyIncome**: Karyawan yang keluar umumnya bergaji lebih rendah.
+    - **YearsAtCompany**: Karyawan yang keluar rata-rata baru bekerja beberapa tahun di perusahaan.
+- **Arah hubungan negatif (Pearson)**: Semakin tinggi nilai fitur-fitur di atas, semakin kecil kemungkinan karyawan keluar.
 
 ---
 
-## Fitur yang Direkomendasikan untuk Dibuang
+### 3. Fitur Ordinal (Spearman Correlation)
+- **JobLevel** menunjukkan korelasi negatif terhadap attrition, meski kekuatannya tidak besar.
+    - Semakin tinggi jabatan seorang karyawan, semakin kecil kemungkinan mereka keluar dari perusahaan.
 
-1. **Tidak Variatif (Konstan)**  
-   - `EmployeeCount`  
-   - `StandardHours`  
-   - `Over18`
+---
 
-2. **Korelasi Sangat Lemah dengan Attrition**  
-   - `MonthlyRate`  
-   - `DailyRate`  
-   - `HourlyRate`
+### 4. Gambaran Umum Profil Karyawan dengan Risiko Tinggi Attrition
+- Karyawan yang **lebih muda, sering bepergian, lajang, sering lembur, bergaji lebih rendah, sedikit pengalaman, dan baru bekerja beberapa tahun** adalah kelompok dengan risiko keluar paling tinggi.
+- Fitur-fitur inilah yang sebaiknya menjadi **fokus utama intervensi HR** atau **dasar dalam membangun model prediksi attrition**.
+
+---
+
+### Fokus
+- **Menentukan strategi retensi pada kelompok risiko tinggi** seperti karyawan baru, lajang, sering lembur, dan sering dinas.
+- **Pertimbangkan kenaikan jabatan, pengembangan karir, dan peningkatan kesejahteraan** sebagai bagian dari upaya menurunkan attrition rate.
+
+> Hasil analisis ini memberikan dasar statistik yang kuat untuk pengambilan keputusan dalam manajemen SDM, khususnya dalam upaya menurunkan tingkat keluar-masuk karyawan (attrition).
 
 ## Data Preparation / Preprocessing
 
 1. Tangani missing values (Attrition) & konversi ke integer
 2. Drop kolom konstan/identifier
 3. Encoding fitur kategorikal/ordinal
+4. Log-transform skewed (optional)
+  * Tujuannya meredam efek outlier dan mengurangi skewness pada data right-skewed, tanpa menghilangkan urutan atau signifikansi ekstremnya.
+  * Model yang akan digunakan adalah Random Forest.
+5. Pembagian data (train_test_split)
 """
 
-# 1. Ubah fitur Attrition ke int64
+# ==================== DATA PREPARATION ====================
+# Drop missing target (Attrition), convert to int
 df = df.dropna(subset=["Attrition"]).copy()
 df["Attrition"] = df["Attrition"].astype(int)
 
-# 2. Drop kolom konstan dan korelasi lemah
+# Drop kolom tidak informatif
 cols_to_drop = [
     "EmployeeId", "EmployeeCount", "StandardHours", "Over18",
     "MonthlyRate", "DailyRate", "HourlyRate"
 ]
 df = df.drop(columns=cols_to_drop)
 
-# 3. Periksa fitur apa yang menggunakan Ordinal Encoding atau One-Hot Encoding
 # Ordinal Encoding dipakai untuk urutan (mis. OverTime, Gender dalam konteks biner).
 # One-Hot Encoding untuk fitur nominal banyak level seperti MaritalStatus.
 df.select_dtypes(include=['object']).nunique()
 
-# 3.1 Ordinal Encoding for binary categorical features
-ordinal_features = ["Gender", "OverTime"]
-ord_enc = OrdinalEncoder()
-df[ordinal_features] = ord_enc.fit_transform(df[ordinal_features])
+# Encoding kategorikal features
+ordinal_features_encoded = ["Gender", "OverTime"]
+df[ordinal_features_encoded] = OrdinalEncoder().fit_transform(df[ordinal_features_encoded])
 
-# 3.2 One-Hot Encoding for all nominal features including BusinessTravel
-nominal_features = ["BusinessTravel", "Department", "EducationField", "JobRole", "MaritalStatus"]
+# Encoding nominal features
+nominal_features_encoded = ["BusinessTravel", "Department", "EducationField", "JobRole", "MaritalStatus"]
 ohe = OneHotEncoder(drop='first', sparse_output=False, dtype=int)
-X_ohe = ohe.fit_transform(df[nominal_features])
-ohe_cols = ohe.get_feature_names_out(nominal_features)
-df_ohe = pd.DataFrame(X_ohe, columns=ohe_cols, index=df.index)
+ohe_df = pd.DataFrame(
+    ohe.fit_transform(df[nominal_features_encoded]),
+    columns=ohe.get_feature_names_out(nominal_features_encoded),
+    index=df.index
+)
 
-# 3.3 Concatenate and drop original nominal columns
-df = pd.concat([df.drop(columns=nominal_features), df_ohe], axis=1)
+# Concatenate and drop original nominal columns
+df = pd.concat([df.drop(columns=nominal_features_encoded), ohe_df], axis=1)
 
-# 3.4 Display resulting DataFrame info
 print("Final DataFrame shape:", df.shape)
 df.info()
 
-df.head()
+"""## Modeling & Evaluation"""
 
+# ==================== MODELING & EVALUATION====================
 
+# ==================== LOGISTIC REGRESSION ====================
+X = df.drop("Attrition", axis=1)
+y = df["Attrition"]
 
-"""## Modeling"""
+# Logistic Regression
+logreg_pipe = Pipeline([
+    ('scaler', StandardScaler()),
+    ('clf', LogisticRegression(penalty='l2', solver='liblinear', random_state=42))
+])
+logreg_pipe.fit(X, y)
 
+coefs = logreg_pipe.named_steps['clf'].coef_[0]
+odds = np.exp(coefs)
+feat_imp = pd.Series(odds, index=X.columns).sort_values(ascending=False)
 
+# Evaluasi logistic regression (fit seluruh data, interpretasi odds ratio)
+print("Top 10 odds ratio tertinggi (faktor risiko keluar):\n", feat_imp.head(10))
+print("\nTop 10 odds ratio terendah (faktor bertahan):\n", feat_imp.tail(10))
 
-"""## Evaluation"""
+# ==================== MODELING & EVALUATION====================
 
+# ==================== CLUSTERING (KMeans) ====================
+
+cluster_feats = ['Age','YearsAtCompany','MonthlyIncome','DistanceFromHome','TotalWorkingYears']
+Xc = df[cluster_feats].dropna()
+kmeans = KMeans(n_clusters=3, random_state=42)
+clusters = kmeans.fit_predict(Xc)
+df['Cluster'] = clusters
+
+profile = df.groupby('Cluster')[['Attrition'] + cluster_feats].agg({
+    'Attrition':'mean',
+    'Age':'mean',
+    'YearsAtCompany':'mean',
+    'MonthlyIncome':'mean',
+    'DistanceFromHome':'mean',
+    'TotalWorkingYears':'mean'
+})
+print("Profil Cluster (attrition rate & mean):\n", profile)
+
+# Akurasi dan classification report (tanpa train-test split)
+y_pred = logreg_pipe.predict(X)
+print("\nAkurasi model (seluruh data):", accuracy_score(y, y_pred))
+print("\nClassification Report:\n", classification_report(y, y_pred))
+
+# Analisis per cluster
+plt.figure(figsize=(8,4))
+sns.barplot(x='Cluster', y='Attrition', data=df, estimator=np.mean)
+plt.title('Attrition Rate per Cluster')
+plt.show()
